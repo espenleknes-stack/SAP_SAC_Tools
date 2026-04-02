@@ -1,0 +1,117 @@
+name: Validate SAC Connection
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to validate'
+        required: false
+        default: 'production'
+
+jobs:
+  validate:
+    name: Test SAC OAuth & API Endpoints
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Request OAuth Token
+        id: token
+        run: |
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            "https://itelligencegroup-2.authentication.eu10.hana.ondemand.com/oauth/token" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=client_credentials" \
+            -d "client_id=${{ secrets.SAC_CLIENT_ID }}" \
+            -d "client_secret=${{ secrets.SAC_CLIENT_SECRET }}")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -1)
+
+          echo "HTTP Status: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ Token request failed (HTTP $HTTP_CODE)"
+            echo "$BODY"
+            exit 1
+          fi
+
+          TOKEN=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+          echo "✅ Token obtained successfully"
+          echo "token=$TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Test Stories API
+        id: stories
+        run: |
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            "https://itelligencegroup-2.eu10.hanacloudservices.cloud.sap/api/v1/stories" \
+            -H "Authorization: Bearer ${{ steps.token.outputs.token }}" \
+            -H "Accept: application/json")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -1)
+
+          echo "HTTP Status: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" == "200" ]; then
+            COUNT=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('value', d.get('stories', []))))" 2>/dev/null || echo "unknown")
+            echo "✅ Stories API reachable — $COUNT stories found"
+          else
+            echo "⚠️ Stories API returned HTTP $HTTP_CODE"
+            echo "$BODY" | python3 -m json.tool 2>/dev/null || echo "$BODY"
+          fi
+
+      - name: Test Planning Models API
+        id: models
+        run: |
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            "https://itelligencegroup-2.eu10.hanacloudservices.cloud.sap/api/v1/dataimport/models" \
+            -H "Authorization: Bearer ${{ steps.token.outputs.token }}" \
+            -H "Accept: application/json")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -1)
+
+          echo "HTTP Status: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" == "200" ]; then
+            COUNT=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('value', [])))" 2>/dev/null || echo "unknown")
+            echo "✅ Models API reachable — $COUNT models found"
+            echo "$BODY" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          models = d.get('value', [])
+          for m in models[:10]:
+              print(f\"  - {m.get('id','?')} ({m.get('description','no description')})\")
+          if len(models) > 10:
+              print(f'  ... and {len(models)-10} more')
+          " 2>/dev/null || true
+          else
+            echo "⚠️ Models API returned HTTP $HTTP_CODE"
+            echo "$BODY" | python3 -m json.tool 2>/dev/null || echo "$BODY"
+          fi
+
+      - name: Test Data Export API
+        run: |
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            "https://itelligencegroup-2.eu10.hanacloudservices.cloud.sap/api/v1/dataexport/providers" \
+            -H "Authorization: Bearer ${{ steps.token.outputs.token }}" \
+            -H "Accept: application/json")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -1)
+
+          if [ "$HTTP_CODE" == "200" ]; then
+            echo "✅ Data Export API reachable"
+          else
+            echo "⚠️ Data Export API returned HTTP $HTTP_CODE (may require additional scope)"
+          fi
+
+      - name: Summary
+        run: |
+          echo ""
+          echo "=============================="
+          echo "  SAC Connection Validation"
+          echo "  Tenant: itelligencegroup-2"
+          echo "  Region: eu10"
+          echo "=============================="
+          echo "If all steps show ✅, credentials are valid — safe to rotate the secret."
