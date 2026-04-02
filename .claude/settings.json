@@ -1,0 +1,15 @@
+{
+  "extraKnownMarketplaces": {
+    "sap-skills": {
+      "source": {
+        "source": "github",
+        "repo": "secondsky/sap-skills"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "sap-sac-scripting@sap-skills": true,
+    "sap-sac-planning@sap-skills": true,
+    "sap-sac-custom-widget@sap-skills": true
+  }
+}
